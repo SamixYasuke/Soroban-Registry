@@ -1,11 +1,12 @@
 // Mock data: conditionally imported only in development/test.
 // In production (NEXT_PUBLIC_USE_MOCKS !== "true"), these are empty stubs
 // that never get reached (gated behind USE_MOCKS checks below).
-// Types are defined later in this file (Contract, ContractExample, ContractVersion),
-// so we use a loosely-typed declaration here and rely on the mock-data module's own types.
-let MOCK_CONTRACTS: Record<string, unknown>[] = [];
-let MOCK_EXAMPLES: Record<string, Record<string, unknown>[]> = {};
-let MOCK_VERSIONS: Record<string, Record<string, unknown>[]> = {};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let MOCK_CONTRACTS: any[] = [];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let MOCK_EXAMPLES: Record<string, any[]> = {};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let MOCK_VERSIONS: Record<string, any[]> = {};
 if (process.env.NEXT_PUBLIC_USE_MOCKS === "true") {
   // Dynamic require ensures Next.js tree-shakes mock-data from production bundles
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -525,8 +526,9 @@ export const api = {
       '/api/contracts'
     );
     // Backend may return "contracts" instead of "items" — normalize for PaginatedResponse
-    if (Array.isArray((data as Record<string, unknown>).contracts) && data.items === undefined) {
-      return { ...data, items: (data as Record<string, unknown>).contracts as Contract[] };
+    const raw = data as unknown as Record<string, unknown>;
+    if (Array.isArray(raw.contracts) && data.items === undefined) {
+      return { ...data, items: raw.contracts as Contract[] };
     }
     return data;
   },
