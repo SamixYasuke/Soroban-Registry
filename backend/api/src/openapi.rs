@@ -15,6 +15,10 @@ use utoipa::OpenApi;
         handlers::list_contracts,
         handlers::get_contract,
         handlers::get_contract_versions,
+        handlers::get_contract_changelog,
+        handlers::get_trust_score,
+        handlers::get_contract_state,
+        handlers::update_contract_state,
         handlers::create_contract_version,
         handlers::publish_contract,
         handlers::create_publisher,
@@ -41,6 +45,8 @@ use utoipa::OpenApi;
         handlers::get_contract_interactions,
         handlers::post_contract_interaction,
         handlers::post_contract_interactions_batch,
+        crate::auth_handlers::get_challenge,
+        crate::auth_handlers::verify_challenge,
         breaking_changes::get_breaking_changes,
         custom_metrics_handlers::get_metric_catalog,
         custom_metrics_handlers::get_contract_metrics,
@@ -100,6 +106,9 @@ use utoipa::OpenApi;
             ContractInteractionResponse,
             CreateInteractionRequest,
             CreateInteractionBatchRequest,
+            crate::auth_handlers::ChallengeResponse,
+            crate::auth_handlers::VerifyRequest,
+            crate::auth_handlers::VerifyResponse,
             breaking_changes::ChangeSeverity,
             breaking_changes::BreakingChange,
             breaking_changes::BreakingChangeReport,
@@ -111,6 +120,7 @@ use utoipa::OpenApi;
         )
     ),
     tags(
+        (name = "Authentication", description = "Wallet-based authentication with challenge/verify"),
         (name = "Observability", description = "Monitor API health and performance"),
         (name = "Contracts", description = "Everything about contracts"),
         (name = "Publishers", description = "Publisher management"),
@@ -123,6 +133,8 @@ use utoipa::OpenApi;
         (name = "Maintenance", description = "Deprecation and version management"),
         (name = "Administration", description = "Administrative audit logs"),
         (name = "Deployments", description = "Deployment management"),
+        (name = "Versions", description = "Contract version history and management"),
+        (name = "Security", description = "Security and trust score assessments"),
     ),
     modifiers(&SecurityAddon)
 )]

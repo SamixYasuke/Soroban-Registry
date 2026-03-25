@@ -163,7 +163,7 @@ async fn write_contract_audit_log(
     get,
     path = "/health",
     responses(
-        (status = 200, description = "Service is healthy", body = Object),
+        (status = 200, description = "Service is healthy", body = Object, example = json!({"status": "ok", "version": "0.1.0", "timestamp": "2023-10-27T10:00:00Z", "uptime_secs": 3600})),
         (status = 503, description = "Service is unavailable or degraded", body = Object)
     ),
     tag = "Observability"
@@ -393,7 +393,7 @@ pub async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<Va
     get,
     path = "/api/stats",
     responses(
-        (status = 200, description = "Global registry statistics", body = Object)
+        (status = 200, description = "Global registry statistics", body = Object, example = json!({"total_contracts": 150, "verified_contracts": 120, "total_publishers": 45}))
     ),
     tag = "Observability"
 )]
@@ -702,15 +702,13 @@ pub async fn get_contract_versions(
 }
 
 #[utoipa::path(
-    post,
-    path = "/api/contracts/{id}/versions",
+    get,
+    path = "/api/contracts/{id}/changelog",
     params(
         ("id" = String, Path, description = "Contract UUID")
     ),
-    request_body = CreateContractVersionRequest,
     responses(
-        (status = 201, description = "Version created successfully", body = ContractVersion),
-        (status = 400, description = "Invalid input or version conflict"),
+        (status = 200, description = "Version history with breaking change markers", body = ContractChangelogResponse),
         (status = 404, description = "Contract not found")
     ),
     tag = "Versions"
@@ -785,6 +783,20 @@ pub async fn get_contract_changelog(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/contracts/{id}/versions",
+    params(
+        ("id" = String, Path, description = "Contract UUID")
+    ),
+    request_body = CreateContractVersionRequest,
+    responses(
+        (status = 201, description = "Version created successfully", body = ContractVersion),
+        (status = 400, description = "Invalid input or version conflict"),
+        (status = 404, description = "Contract not found")
+    ),
+    tag = "Versions"
+)]
 pub async fn create_contract_version(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1616,6 +1628,18 @@ pub async fn get_contract_analytics(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/contracts/{id}/trust-score",
+    params(
+        ("id" = String, Path, description = "Contract UUID")
+    ),
+    responses(
+        (status = 200, description = "Trust score and security assessment", body = Object),
+        (status = 404, description = "Contract not found")
+    ),
+    tag = "Security"
+)]
 pub async fn get_trust_score() -> impl IntoResponse {
     planned_not_implemented_response()
 }
