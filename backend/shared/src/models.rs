@@ -355,13 +355,19 @@ pub struct VerifyRequest {
 
 /// Sorting options for contracts
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
 pub enum SortBy {
+    #[serde(rename = "created_at", alias = "createdat")]
     CreatedAt,
+    #[serde(rename = "updated_at", alias = "updatedat")]
     UpdatedAt,
+    #[serde(rename = "popularity")]
     Popularity,
+    #[serde(rename = "deployments")]
     Deployments,
+    // Kept for backwards/UX compatibility: the frontend supports "downloads".
+    #[serde(rename = "interactions", alias = "downloads")]
     Interactions,
+    #[serde(rename = "relevance")]
     Relevance,
 }
 

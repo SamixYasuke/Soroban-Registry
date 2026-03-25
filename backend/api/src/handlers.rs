@@ -464,20 +464,33 @@ pub async fn list_contracts(
 
     let is_timestamp_sort = matches!(sort_by, shared::SortBy::CreatedAt);
 
-    // Build dynamic query with aggregations
+    // Build dynamic query with pre-aggregated subqueries to avoid join explosions.
+    // (popularity/deployments sorting relies on these aggregates)
     let mut query = String::from(
         "SELECT c.*
          FROM contracts c
-         LEFT JOIN contract_interactions ci ON c.id = ci.contract_id
-         LEFT JOIN contract_versions cv ON c.id = cv.contract_id
+         LEFT JOIN (
+           SELECT contract_id, COUNT(*)::bigint AS interaction_count
+           FROM contract_interactions
+           GROUP BY contract_id
+         ) ci ON c.id = ci.contract_id
+         LEFT JOIN (
+           SELECT contract_id, COUNT(*)::bigint AS deployment_count
+           FROM contract_versions
+           GROUP BY contract_id
+         ) cv ON c.id = cv.contract_id
          WHERE 1=1",
     );
-    let mut count_query = String::from("SELECT COUNT(*) FROM contracts WHERE 1=1");
+    let mut count_query = String::from("SELECT COUNT(*) FROM contracts c WHERE 1=1");
+
+    // Minimal SQL literal escaping for dynamically built clauses.
+    // This is NOT a replacement for parameter binding, but keeps common cases working.
+    let escape_sql_literal = |v: &str| v.replace('\'', "''");
 
     if let Some(ref q) = params.query {
+        let q_sql = escape_sql_literal(q);
         let search_clause = format!(
-            " AND (c.name ILIKE '%{}%' OR c.description ILIKE '%{}%')",
-            q, q
+            " AND (c.name ILIKE '%{q_sql}%' OR c.description ILIKE '%{q_sql}%')"
         );
         query.push_str(&search_clause);
         count_query.push_str(&search_clause);
@@ -486,12 +499,12 @@ pub async fn list_contracts(
     if let Some(verified) = params.verified_only {
         if verified {
             query.push_str(" AND c.is_verified = true");
-            count_query.push_str(" AND is_verified = true");
+            count_query.push_str(" AND c.is_verified = true");
         }
     }
 
     if let Some(ref category) = params.category {
-        let category_clause = format!(" AND c.category = '{}'", category);
+        let category_clause = format!(" AND c.category = '{}'", escape_sql_literal(category));
         query.push_str(&category_clause);
         count_query.push_str(&category_clause);
     }
@@ -535,23 +548,27 @@ pub async fn list_contracts(
         }
     }
 
-    query.push_str(" GROUP BY c.id");
-
-    // Sorting logic using aggregations in ORDER BY
-    let order_by = match sort_by {
+    // Sorting logic using pre-aggregated metrics in ORDER BY.
+    let order_by_expr = match sort_by {
         shared::SortBy::CreatedAt => "c.created_at".to_string(),
         shared::SortBy::UpdatedAt => "c.updated_at".to_string(),
         shared::SortBy::Popularity | shared::SortBy::Interactions => {
-            "COUNT(DISTINCT ci.id)".to_string()
+            "COALESCE(ci.interaction_count, 0)".to_string()
         }
-        shared::SortBy::Deployments => "COUNT(DISTINCT cv.id)".to_string(),
+        shared::SortBy::Deployments => "COALESCE(cv.deployment_count, 0)".to_string(),
         shared::SortBy::Relevance => {
             if let Some(ref q) = params.query {
+                let q_sql = escape_sql_literal(q);
+                // Lower numeric values are "worse"; combined with DESC (default) this yields
+                // most-relevant contracts first: exact name > partial name > exact description > partial description.
                 format!(
-                    "CASE WHEN c.name ILIKE '{}' THEN 0
-                          WHEN c.name ILIKE '%{}%' THEN 1
-                          ELSE 2 END",
-                    q, q
+                    "CASE
+                      WHEN c.name ILIKE '{q_sql}' THEN 3
+                      WHEN c.description ILIKE '{q_sql}' THEN 2
+                      WHEN c.name ILIKE '%{q_sql}%' THEN 1
+                      WHEN c.description ILIKE '%{q_sql}%' THEN 0
+                      ELSE 0
+                    END"
                 )
             } else {
                 "c.created_at".to_string()
@@ -564,10 +581,11 @@ pub async fn list_contracts(
     } else {
         "DESC"
     };
+    let tie_break_dir = direction;
 
     query.push_str(&format!(
-        " ORDER BY {} {}, c.id DESC LIMIT {} OFFSET {}",
-        order_by, direction, limit, offset
+        " ORDER BY {} {}, c.id {} LIMIT {} OFFSET {}",
+        order_by_expr, direction, tie_break_dir, limit, offset
     ));
 
     let contracts: Vec<Contract> = match sqlx::query_as(&query).fetch_all(&state.db).await {
@@ -582,20 +600,24 @@ pub async fn list_contracts(
 
     let mut response = PaginatedResponse::new(contracts, total, page, limit);
 
-    // Generate next cursor if we have full page
-    if response.items.len() >= limit as usize {
-        if let Some(last) = response.items.last() {
-            let next_cursor = Cursor::new(last.created_at, last.id).encode();
-            response.next_cursor = Some(next_cursor);
+    // Generate cursors only when we're doing timestamp-based ordering.
+    // (Cursor semantics are currently implemented for `created_at`-ordering.)
+    if is_timestamp_sort {
+        // Generate next cursor if we have full page
+        if response.items.len() >= limit as usize {
+            if let Some(last) = response.items.last() {
+                let next_cursor = Cursor::new(last.created_at, last.id).encode();
+                response.next_cursor = Some(next_cursor);
+            }
         }
-    }
 
-    // Generate prev cursor if we have items and are not on the first page
-    // (Simplification: if we have a cursor, or page > 1)
-    if params.cursor.is_some() || page > 1 {
-        if let Some(first) = response.items.first() {
-            let prev_cursor = Cursor::new(first.created_at, first.id).encode();
-            response.prev_cursor = Some(prev_cursor);
+        // Generate prev cursor if we have items and are not on the first page
+        // (Simplification: if we have a cursor, or page > 1)
+        if params.cursor.is_some() || page > 1 {
+            if let Some(first) = response.items.first() {
+                let prev_cursor = Cursor::new(first.created_at, first.id).encode();
+                response.prev_cursor = Some(prev_cursor);
+            }
         }
     }
 
