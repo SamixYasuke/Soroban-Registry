@@ -33,6 +33,9 @@ pub struct Contract {
     /// Per-network config: { "mainnet": { contract_id, is_verified, min_version, max_version }, ... }
     #[serde(default)]
     pub network_configs: Option<serde_json::Value>,
+    /// Search relevance score (calculated at runtime)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relevance_score: Option<f64>,
 }
 
 /// Response for GET /contracts/:id with optional network-specific slice (Issue #43)
@@ -390,6 +393,13 @@ pub struct ContractSearchParams {
     pub sort_by: Option<SortBy>,
     pub sort_order: Option<SortOrder>,
     pub cursor: Option<String>,
+    // Ranking weights for tuning
+    pub w_text: Option<f64>,
+    pub w_pop: Option<f64>,
+    pub w_rec: Option<f64>,
+    pub w_rat: Option<f64>,
+    // For personalized ranking (Stellar address)
+    pub user_id: Option<String>,
 }
 
 /// Pagination params for contract versions (limit/offset style)
@@ -1033,6 +1043,7 @@ pub enum AnalyticsEventType {
     VersionCreated,
     ContractUpdated,
     PublisherCreated,
+    SearchClick,
 }
 
 impl std::fmt::Display for AnalyticsEventType {
@@ -1044,6 +1055,7 @@ impl std::fmt::Display for AnalyticsEventType {
             Self::VersionCreated => write!(f, "version_created"),
             Self::ContractUpdated => write!(f, "contract_updated"),
             Self::PublisherCreated => write!(f, "publisher_created"),
+            Self::SearchClick => write!(f, "search_click"),
         }
     }
 }

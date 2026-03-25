@@ -28,6 +28,8 @@ use uuid::Uuid;
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
 pub struct GetContractQuery {
     pub network: Option<Network>,
+    pub from_search: Option<bool>,
+    pub search_query: Option<String>,
 }
 
 use crate::{
@@ -464,20 +466,75 @@ pub async fn list_contracts(
 
     let is_timestamp_sort = matches!(sort_by, shared::SortBy::CreatedAt);
 
-    // Build dynamic query with aggregations
-    let mut query = String::from(
-        "SELECT c.*
-         FROM contracts c
-         LEFT JOIN contract_interactions ci ON c.id = ci.contract_id
-         LEFT JOIN contract_versions cv ON c.id = cv.contract_id
-         WHERE 1=1",
+    // Weights for ranking (configurable via parameters or default)
+    let w_text = params.w_text.unwrap_or(1.0);
+    let w_pop = params.w_pop.unwrap_or(0.5);
+    let w_rec = params.w_rec.unwrap_or(0.3);
+    let w_rat = params.w_rat.unwrap_or(0.4);
+    let w_pers = 0.5; // Weight for personalized boost
+
+    // Build dynamic query with advanced ranking
+    let mut query = String::from("WITH contract_stats AS (\n");
+    query.push_str(
+        "    SELECT 
+                c.id,
+                COUNT(DISTINCT ci.id) as interaction_count,
+                COUNT(DISTINCT cv.id) as deployment_count,
+                COALESCE(AVG(r.rating), 0) as avg_rating,
+                COUNT(DISTINCT r.id) as review_count",
     );
-    let mut count_query = String::from("SELECT COUNT(*) FROM contracts WHERE 1=1");
+
+    if let Some(ref uid) = params.user_id {
+        let cleaned_uid = uid.replace('\'', "''");
+        query.push_str(&format!(
+            ",\n                COUNT(DISTINCT CASE WHEN ci.user_address = '{}' THEN ci.id END) as user_interaction_count",
+            cleaned_uid
+        ));
+    } else {
+        query.push_str(",\n                0 as user_interaction_count");
+    }
+
+    query.push_str(
+        "\n            FROM contracts c
+            LEFT JOIN contract_interactions ci ON c.id = ci.contract_id
+            LEFT JOIN contract_versions cv ON c.id = cv.contract_id
+            LEFT JOIN reviews r ON c.id = r.contract_id AND r.is_flagged = FALSE
+            GROUP BY c.id
+        ),\n",
+    );
+
+    query.push_str("ranked_contracts AS (\n");
+    query.push_str("    SELECT \n");
+    query.push_str("        c.*, \n");
+    
+    if let Some(ref q) = params.query {
+        // Clean query for tsquery
+        let cleaned_q = q.replace('\'', "''");
+        query.push_str(&format!(
+            "        ts_rank_cd(c.search_vector, plainto_tsquery('english', '{}')) as text_relevance,\n",
+            cleaned_q
+        ));
+    } else {
+        query.push_str("        0.0 as text_relevance,\n");
+    }
+
+    query.push_str(&format!(
+        "        LOG(1 + cs.interaction_count + 2 * cs.deployment_count) as popularity_score,
+        1.0 / (1.0 + EXTRACT(DAYS FROM (NOW() - c.updated_at)) / 30.0) as recency_score,
+        (cs.avg_rating / 5.0) * LOG(1.0 + cs.review_count) as rating_score,
+        LOG(1 + cs.user_interaction_count) as personal_boost
+    FROM contracts c
+    JOIN contract_stats cs ON c.id = cs.id
+    WHERE 1=1"
+    ));
+
+    let mut count_query = String::from("SELECT COUNT(*) FROM contracts c WHERE 1=1");
 
     if let Some(ref q) = params.query {
+        let cleaned_q = q.replace('\'', "''");
         let search_clause = format!(
-            " AND (c.name ILIKE '%{}%' OR c.description ILIKE '%{}%')",
-            q, q
+            " AND (c.search_vector @@ plainto_tsquery('english', '{}') OR c.name ILIKE '%{}%' OR c.description ILIKE '%{}%')",
+            cleaned_q, cleaned_q, cleaned_q
         );
         query.push_str(&search_clause);
         count_query.push_str(&search_clause);
@@ -486,7 +543,7 @@ pub async fn list_contracts(
     if let Some(verified) = params.verified_only {
         if verified {
             query.push_str(" AND c.is_verified = true");
-            count_query.push_str(" AND is_verified = true");
+            count_query.push_str(" AND c.is_verified = true");
         }
     }
 
@@ -496,7 +553,7 @@ pub async fn list_contracts(
         count_query.push_str(&category_clause);
     }
 
-    // Filter by network(s) (Issue #43)
+    // Filter by network(s)
     let network_list = params
         .networks
         .as_ref()
@@ -535,28 +592,22 @@ pub async fn list_contracts(
         }
     }
 
-    query.push_str(" GROUP BY c.id");
+    query.push_str("\n)\n"); // End of ranked_contracts CTE
 
-    // Sorting logic using aggregations in ORDER BY
+    query.push_str("SELECT *, (");
+    query.push_str(&format!(
+        "{} * text_relevance + {} * popularity_score + {} * recency_score + {} * rating_score + {} * personal_boost",
+        w_text, w_pop, w_rec, w_rat, w_pers
+    ));
+    query.push_str(") as relevance_score FROM ranked_contracts");
+
+    // Sorting logic
     let order_by = match sort_by {
-        shared::SortBy::CreatedAt => "c.created_at".to_string(),
-        shared::SortBy::UpdatedAt => "c.updated_at".to_string(),
-        shared::SortBy::Popularity | shared::SortBy::Interactions => {
-            "COUNT(DISTINCT ci.id)".to_string()
-        }
-        shared::SortBy::Deployments => "COUNT(DISTINCT cv.id)".to_string(),
-        shared::SortBy::Relevance => {
-            if let Some(ref q) = params.query {
-                format!(
-                    "CASE WHEN c.name ILIKE '{}' THEN 0
-                          WHEN c.name ILIKE '%{}%' THEN 1
-                          ELSE 2 END",
-                    q, q
-                )
-            } else {
-                "c.created_at".to_string()
-            }
-        }
+        shared::SortBy::CreatedAt => "created_at".to_string(),
+        shared::SortBy::UpdatedAt => "updated_at".to_string(),
+        shared::SortBy::Popularity | shared::SortBy::Interactions => "popularity_score".to_string(),
+        shared::SortBy::Deployments => "deployment_count".to_string(),
+        shared::SortBy::Relevance => "relevance_score".to_string(),
     };
 
     let direction = if sort_order == shared::SortOrder::Asc {
@@ -566,13 +617,16 @@ pub async fn list_contracts(
     };
 
     query.push_str(&format!(
-        " ORDER BY {} {}, c.id DESC LIMIT {} OFFSET {}",
+        " ORDER BY {} {}, id DESC LIMIT {} OFFSET {}",
         order_by, direction, limit, offset
     ));
 
     let contracts: Vec<Contract> = match sqlx::query_as(&query).fetch_all(&state.db).await {
         Ok(rows) => rows,
-        Err(err) => return db_internal_error("list contracts", err).into_response(),
+        Err(err) => {
+            tracing::error!(query = %query, error = ?err, "Search query failed");
+            return db_internal_error("list contracts with ranking", err).into_response()
+        },
     };
 
     let total: i64 = match sqlx::query_scalar(&count_query).fetch_one(&state.db).await {
@@ -591,7 +645,6 @@ pub async fn list_contracts(
     }
 
     // Generate prev cursor if we have items and are not on the first page
-    // (Simplification: if we have a cursor, or page > 1)
     if params.cursor.is_some() || page > 1 {
         if let Some(first) = response.items.first() {
             let prev_cursor = Cursor::new(first.created_at, first.id).encode();
@@ -658,6 +711,23 @@ pub async fn get_contract(
     } else {
         None
     };
+
+    // Record search click if applicable
+    if query.from_search.unwrap_or(false) {
+        let _ = analytics::record_event(
+            &state.db,
+            shared::AnalyticsEventType::SearchClick,
+            Some(contract.id),
+            Some(contract.publisher_id),
+            None,
+            query.network.as_ref(),
+            Some(serde_json::json!({
+                "search_query": query.search_query,
+                "timestamp": chrono::Utc::now()
+            })),
+        )
+        .await;
+    }
 
     Ok(Json(ContractGetResponse {
         contract,
