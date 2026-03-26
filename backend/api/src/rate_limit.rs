@@ -38,14 +38,14 @@ use axum::{
     extract::{connect_info::ConnectInfo, State},
     http::{
         header::{AUTHORIZATION, RETRY_AFTER},
-        HeaderName, HeaderValue, Request, StatusCode,
+        HeaderName, HeaderValue, Request,
     },
     middleware::Next,
     response::{IntoResponse, Response},
-    Json,
 };
-use serde_json::json;
 use tokio::sync::Mutex;
+
+use crate::error::ApiError;
 
 const DEFAULT_ANON_LIMIT_PER_MINUTE: u32 = 100;
 const DEFAULT_AUTH_LIMIT_PER_MINUTE: u32 = 1_000;
@@ -254,17 +254,12 @@ pub async fn rate_limit_middleware(
     let decision = rate_limiter.check_request(key, limit).await;
 
     if !decision.allowed {
-        let mut response = (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({
-                "error": "RateLimitExceeded",
-                "message": "Too many requests. Please retry after the indicated time.",
-                "code": 429,
-                "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                "correlation_id": uuid::Uuid::new_v4().to_string()
-            })),
-        )
-            .into_response();
+        let mut response =
+            ApiError::rate_limited("Too many requests. Please retry after the indicated time.")
+                .with_details(serde_json::json!({
+                    "retry_after_seconds": decision.reset_seconds
+                }))
+                .into_response();
         attach_rate_limit_headers(&mut response, &decision);
         response.headers_mut().insert(
             RETRY_AFTER,
@@ -401,7 +396,7 @@ fn ceil_duration_to_seconds(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{http::Request, middleware, routing::get, Router};
+    use axum::{http::{Request, StatusCode}, middleware, routing::get, Router};
     use tower::Service;
 
     fn test_app(anonymous_limit: u32, auth_limit: u32, window: Duration) -> Router<()> {
@@ -538,6 +533,12 @@ mod tests {
             .headers()
             .contains_key(HEADER_RATE_LIMIT_RESET));
         assert!(limited_response.headers().contains_key(RETRY_AFTER));
+
+        let body = axum::body::to_bytes(limited_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error_code"], "RATE_LIMITED");
     }
 
     #[tokio::test]

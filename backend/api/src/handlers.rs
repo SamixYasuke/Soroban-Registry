@@ -3017,10 +3017,7 @@ pub async fn post_contract_interactions_batch(
 }
 
 pub async fn route_not_found() -> impl IntoResponse {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({"error": "Route not found"})),
-    )
+    ApiError::not_found("ROUTE_NOT_FOUND", "Route not found")
 }
 
 #[cfg(test)]
@@ -3033,6 +3030,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_shutdown_returns_503() {
+        unsafe {
+            std::env::set_var("JWT_SECRET", "abcdefghijklmnopqrstuvwxyz012345");
+        }
+
         let is_shutting_down = Arc::new(AtomicBool::new(true));
 
         // Connect lazy so it doesn't fail immediately without a DB
@@ -3085,5 +3086,18 @@ mod tests {
         assert_eq!(new["status"], "verified");
         assert_eq!(new["verification_id"], "abc123");
         assert_eq!(new["_ip_address"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn route_not_found_uses_standard_error_format() {
+        let response = route_not_found().await.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error_code"], "NOT_FOUND");
+        assert_eq!(value["message"], "Route not found");
     }
 }

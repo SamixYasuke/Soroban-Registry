@@ -56,11 +56,13 @@ Retry-After: 42
 Content-Type: application/json
 
 {
-  "error": "RateLimitExceeded",
+  "error_code": "RATE_LIMITED",
   "message": "Too many requests. Please retry after the indicated time.",
-  "code": 429,
-  "timestamp": "2026-02-24T12:34:56Z",
-  "correlation_id": "550e8400-e29b-41d4-a716-446655440000"
+  "details": {
+    "retry_after_seconds": 42,
+    "correlation_id": "550e8400-e29b-41d4-a716-446655440000"
+  },
+  "timestamp": "2026-02-24T12:34:56Z"
 }
 ```
 
