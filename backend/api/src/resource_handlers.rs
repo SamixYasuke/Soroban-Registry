@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 
+use crate::error::ApiError;
 use crate::state::AppState;
 
 pub async fn get_contract_resources(
@@ -12,12 +13,8 @@ pub async fn get_contract_resources(
     let mgr = state.resource_mgr.read().unwrap();
     match mgr.summary(&id) {
         Some(summary) => (StatusCode::OK, Json(summary)).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({ "error": "no resource data for contract", "contract_id": id }),
-            ),
-        )
+        None => ApiError::not_found("RESOURCE_DATA_NOT_FOUND", "No resource data for contract")
+            .with_details(serde_json::json!({ "contract_id": id }))
             .into_response(),
     }
 }

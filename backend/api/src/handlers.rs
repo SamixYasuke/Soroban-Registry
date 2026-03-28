@@ -3854,10 +3854,7 @@ pub async fn post_contract_interactions_batch(
 }
 
 pub async fn route_not_found() -> impl IntoResponse {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({"error": "Route not found"})),
-    )
+    ApiError::not_found("ROUTE_NOT_FOUND", "Route not found")
 }
 
 #[cfg(test)]
@@ -3872,6 +3869,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check_shutdown_returns_503() {
+        unsafe {
+            std::env::set_var("JWT_SECRET", "abcdefghijklmnopqrstuvwxyz012345");
+        }
+
         let is_shutting_down = Arc::new(AtomicBool::new(true));
 
         // Connect lazy so it doesn't fail immediately without a DB

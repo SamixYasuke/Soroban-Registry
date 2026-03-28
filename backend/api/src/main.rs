@@ -69,9 +69,13 @@ async fn track_in_flight_middleware(
     State(state): State<AppState>,
     req: Request,
     next: middleware::Next,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, ApiError> {
     if state.is_shutting_down.load(Ordering::Relaxed) {
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SERVICE_UNAVAILABLE",
+            "Service is shutting down and temporarily unavailable",
+        ));
     }
     crate::metrics::HTTP_IN_FLIGHT.inc();
     let res = next.run(req).await;
@@ -79,6 +83,7 @@ async fn track_in_flight_middleware(
     Ok(res)
 }
 
+use crate::error::ApiError;
 use crate::rate_limit::RateLimitState;
 use crate::state::AppState;
 
