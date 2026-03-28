@@ -67,6 +67,18 @@ export default function Navbar() {
                             Compare
                         </Link>
 
+                        <Link
+                            href="/verify-contract"
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium transition-all ${
+                                isActive('/verify-contract')
+                                    ? 'text-primary bg-primary/10'
+                                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                            }`}
+                        >
+                            <ShieldCheck className="w-3 h-3" />
+                            Verify
+                        </Link>
+
                         {/* Explore Dropdown */}
                         <div
                             className="relative"
@@ -189,6 +201,7 @@ export default function Navbar() {
                             {[
                                 { href: '/contracts', label: 'Browse Contracts', icon: Search },
                                 { href: '/compare', label: 'Compare Contracts', icon: Columns2 },
+                                { href: '/verify-contract', label: 'Verify Contract', icon: ShieldCheck },
                                 { href: '/publishers', label: 'Publishers', icon: Users },
                                 { href: '/stats', label: 'Statistics', icon: BarChart2 },
                                 { href: '/analytics', label: 'Analytics', icon: PieChart },
